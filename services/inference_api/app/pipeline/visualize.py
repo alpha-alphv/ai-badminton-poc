@@ -1,8 +1,14 @@
+import logging
+import os
+import shutil
+import subprocess
 from collections import deque
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # COCO keypoint skeleton (used by yolov8-pose)
 _SKELETON = [
@@ -94,36 +100,163 @@ def draw_hud(canvas: np.ndarray, *, frame_idx: int, rally_id: int | None,
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, s_color, 1, cv2.LINE_AA)
 
 
+_ENCODER_UNPROBED = object()
+_ffmpeg_encoder_cache: object = _ENCODER_UNPROBED
+
+
+def _detect_ffmpeg_encoder() -> str | None:
+    """Pick the best available H.264 encoder, preferring NVIDIA NVENC.
+
+    Returns the codec name (``h264_nvenc`` or ``libx264``) or ``None`` if
+    ffmpeg isn't on PATH. Result is cached for the process lifetime.
+    Honours ``VIDEO_ENCODER`` env (``h264_nvenc`` | ``libx264`` | ``cv2``).
+    """
+    global _ffmpeg_encoder_cache
+    if _ffmpeg_encoder_cache is not _ENCODER_UNPROBED:
+        return _ffmpeg_encoder_cache  # type: ignore[return-value]
+
+    forced = os.environ.get("VIDEO_ENCODER")
+    if forced == "cv2":
+        _ffmpeg_encoder_cache = None
+        return None
+    if shutil.which("ffmpeg") is None:
+        _ffmpeg_encoder_cache = None
+        return None
+    try:
+        out = subprocess.check_output(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        logger.warning("ffmpeg -encoders probe failed: %s", exc)
+        _ffmpeg_encoder_cache = None
+        return None
+
+    if forced in ("h264_nvenc", "libx264") and forced in out:
+        _ffmpeg_encoder_cache = forced
+        return forced
+    if forced and forced not in ("h264_nvenc", "libx264", "cv2"):
+        logger.warning("ignoring unknown VIDEO_ENCODER=%s", forced)
+
+    for codec in ("h264_nvenc", "libx264"):
+        if codec in out:
+            _ffmpeg_encoder_cache = codec
+            return codec
+    _ffmpeg_encoder_cache = None
+    return None
+
+
 class VideoAnnotator:
-    """Encodes annotated frames into an H.264 MP4 (with mp4v fallback)."""
+    """Encodes annotated BGR frames into an H.264 MP4.
+
+    Prefers ``h264_nvenc`` (NVIDIA GPU) → ``libx264`` (CPU) via a piped
+    ffmpeg subprocess so we get a browser-playable file and avoid
+    OpenCV's flaky FFmpeg backend auto-selection (which on some Linux
+    boxes mis-picks ``h264_v4l2m2m`` and dies). Falls back to
+    ``cv2.VideoWriter`` with mp4v if ffmpeg isn't available.
+    """
 
     def __init__(self, output_path: Path, width: int, height: int, fps: float) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         self.output_path = output_path
-        self.width = width
-        self.height = height
+        self.width = int(width)
+        self.height = int(height)
         self.fps = fps if fps > 0 else 25.0
+        self._proc: subprocess.Popen | None = None
+        self._writer: cv2.VideoWriter | None = None
+        self._encoder: str = "none"
+
+        encoder = _detect_ffmpeg_encoder()
+        if encoder is not None:
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "rawvideo", "-vcodec", "rawvideo",
+                "-pix_fmt", "bgr24",
+                "-s", f"{self.width}x{self.height}",
+                "-r", f"{self.fps:.3f}",
+                "-i", "-",
+                "-c:v", encoder,
+            ]
+            if encoder == "h264_nvenc":
+                cmd += ["-preset", "p4", "-cq", "23"]
+            else:
+                cmd += ["-preset", "fast", "-crf", "23"]
+            cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output_path)]
+            try:
+                self._proc = subprocess.Popen(
+                    cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE
+                )
+                self._encoder = encoder
+                logger.info("VideoAnnotator using ffmpeg encoder=%s", encoder)
+                return
+            except Exception as exc:
+                logger.exception("failed to launch ffmpeg (%s); falling back: %s", encoder, exc)
+                self._proc = None
 
         self._writer = cv2.VideoWriter(
             str(output_path),
-            cv2.VideoWriter_fourcc(*"avc1"),
+            cv2.VideoWriter_fourcc(*"mp4v"),
             self.fps,
-            (width, height),
+            (self.width, self.height),
         )
+        self._encoder = "cv2:mp4v"
         if not self._writer.isOpened():
-            self._writer = cv2.VideoWriter(
-                str(output_path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                self.fps,
-                (width, height),
-            )
+            logger.error("cv2.VideoWriter could not open %s with mp4v", output_path)
+            self._writer = None
+            self._encoder = "none"
 
     def write(self, frame: np.ndarray) -> None:
         if frame.shape[1] != self.width or frame.shape[0] != self.height:
             frame = cv2.resize(frame, (self.width, self.height))
-        self._writer.write(frame)
+        if not frame.flags["C_CONTIGUOUS"]:
+            frame = np.ascontiguousarray(frame)
+        if self._proc is not None and self._proc.stdin is not None:
+            try:
+                self._proc.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                stderr = b""
+                if self._proc.stderr is not None:
+                    try:
+                        stderr = self._proc.stderr.read()
+                    except Exception:
+                        pass
+                logger.error("ffmpeg (%s) closed stdin early: %s",
+                             self._encoder, stderr.decode("utf-8", errors="ignore"))
+                self._proc = None
+            return
+        if self._writer is not None:
+            self._writer.write(frame)
 
     def close(self) -> None:
+        if self._proc is not None:
+            try:
+                if self._proc.stdin is not None:
+                    self._proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                rc = self._proc.wait(timeout=120)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+                rc = self._proc.wait()
+                logger.error("ffmpeg encoder %s timed out and was killed", self._encoder)
+            stderr = b""
+            if self._proc.stderr is not None:
+                try:
+                    stderr = self._proc.stderr.read()
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        self._proc.stderr.close()
+                    except Exception:
+                        pass
+            if rc != 0:
+                logger.error("ffmpeg encoder %s exited rc=%d: %s",
+                             self._encoder, rc, stderr.decode("utf-8", errors="ignore"))
+            self._proc = None
         if self._writer is not None:
             self._writer.release()
             self._writer = None
