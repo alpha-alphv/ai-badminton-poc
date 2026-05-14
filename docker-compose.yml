@@ -1,0 +1,76 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web_app:
+    build:
+      context: .
+      dockerfile: services/web_app/Dockerfile
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - FLASK_APP=services.web_app.wsgi:app
+      - FLASK_DEBUG=1
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/data
+      - ./services/web_app:/app/services/web_app
+      - ./shared:/app/shared
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      # Lets the container resolve host.docker.internal on Linux too.
+      # No-op on Windows/Mac where Docker Desktop adds it automatically.
+      - "host.docker.internal:host-gateway"
+    command: flask run --host 0.0.0.0 --port 5000
+
+  worker:
+    build:
+      context: .
+      dockerfile: workers/Dockerfile
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/data
+      - ./workers:/app/workers
+      - ./shared:/app/shared
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=2
+
+  # Local CPU inference container.
+  # Default deployment uses GPU on Grafilab over an SSH tunnel — this service
+  # only runs when you opt in via `docker compose --profile local up`.
+  inference_api:
+    profiles: ["local"]
+    build:
+      context: .
+      dockerfile: services/inference_api/Dockerfile
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - INFERENCE_DEVICE=cpu
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+      - ./services/inference_api:/app/services/inference_api
+      - ./shared:/app/shared
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: uvicorn services.inference_api.app.main:app --host 0.0.0.0 --port 8000 --reload

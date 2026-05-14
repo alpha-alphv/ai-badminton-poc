@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section>
+  <h2>Video Performance Analysis — POC</h2>
+  <p>Upload a match video; the pipeline runs and returns video metadata (no-op stand-in until the YOLOv8 pipeline lands).</p>
+  <p><a class="btn" href="{{ url_for('upload.form') }}">Upload a video</a> &nbsp; <a class="btn" href="{{ url_for('jobs.list_jobs') }}">View jobs</a></p>
+</section>
+{% endblock %}

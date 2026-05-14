@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Upload — Badminton AI{% endblock %}
+{% block content %}
+<section>
+  <h2>Upload match video</h2>
+  <form method="post" action="{{ url_for('upload.submit') }}" enctype="multipart/form-data">
+    <label>Video file
+      <input type="file" name="video" accept=".mp4,.avi,.mov,.mkv,.webm,.flv" required>
+    </label>
+    <button type="submit" class="btn">Submit</button>
+  </form>
+  <p class="hint">Accepted formats: MP4, AVI, MOV, MKV, WebM, FLV.</p>
+</section>
+{% endblock %}

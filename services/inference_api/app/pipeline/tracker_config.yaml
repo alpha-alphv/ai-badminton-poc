@@ -1,0 +1,10 @@
+# Ultralytics ByteTrack configuration tuned for badminton broadcast footage.
+# Players move fast and net-play causes brief occlusions; we keep the track
+# buffer modest and require strong matches to reduce ID swaps.
+tracker_type: bytetrack
+track_high_thresh: 0.5
+track_low_thresh: 0.1
+new_track_thresh: 0.6
+track_buffer: 30
+match_thresh: 0.85
+fuse_score: True

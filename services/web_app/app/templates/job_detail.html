@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id[:8] }} — Badminton AI{% endblock %}
+{% block content %}
+<section>
+  <h2>Job <code>{{ job.id }}</code></h2>
+  <dl>
+    <dt>File</dt><dd>{{ job.filename }}</dd>
+    <dt>Status</dt><dd><span class="status status-{{ job.status }}">{{ job.status }}</span></dd>
+    <dt>Progress</dt><dd>{{ job.progress }}%</dd>
+    <dt>Created</dt><dd>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+    <dt>Updated</dt><dd>{{ job.updated_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+  </dl>
+
+  {% if job.error %}
+  <div class="error">
+    <strong>Error</strong>
+    <pre>{{ job.error }}</pre>
+  </div>
+  {% endif %}
+
+  {% if job.result %}
+    {% set r = job.result %}
+    <h3>Pipeline summary</h3>
+    <dl class="grid">
+      <dt>Pipeline</dt><dd>{{ r.pipeline }}</dd>
+      <dt>Model</dt><dd>{{ r.model }}</dd>
+      <dt>Device</dt><dd>{{ r.device }}</dd>
+      <dt>Frames processed</dt><dd>{{ r.frames_processed }}</dd>
+      <dt>Inference time</dt><dd>{{ '%.2f'|format(r.elapsed_seconds or 0) }} s</dd>
+      <dt>Source</dt><dd>{{ r.metadata.width }}x{{ r.metadata.height }} @ {{ '%.1f'|format(r.metadata.fps) }} fps, {{ '%.1f'|format(r.metadata.duration_seconds) }} s</dd>
+    </dl>
+
+    {% set files = (r.artifacts and r.artifacts.local_files) or {} %}
+    {% if files.sample_frame %}
+      <h3>Sample frame (YOLOv8-pose + ByteTrack)</h3>
+      <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.sample_frame) }}" alt="annotated sample frame">
+    {% endif %}
+
+    {% if files.heatmap %}
+      <h3>Court coverage heatmap</h3>
+      <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.heatmap) }}" alt="player heatmap">
+    {% endif %}
+
+    {% if r.tracks %}
+      <h3>Tracks <span class="muted">({{ r.tracks|length }})</span></h3>
+      <table>
+        <thead><tr><th>ID</th><th>First frame</th><th>Last frame</th><th>Frames</th><th>Mean confidence</th></tr></thead>
+        <tbody>
+          {% for t in r.tracks %}
+          <tr>
+            <td>{{ t.track_id }}</td>
+            <td>{{ t.first_frame }}</td>
+            <td>{{ t.last_frame }}</td>
+            <td>{{ t.frame_count }}</td>
+            <td>{{ '%.3f'|format(t.mean_confidence) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% else %}
+    <p class="hint">Result will appear here when the worker completes the job.</p>
+  {% endif %}
+</section>
+<script>
+  (function () {
+    const terminal = ["succeeded", "failed"];
+    if (terminal.includes("{{ job.status }}")) return;
+    setTimeout(() => window.location.reload(), 3000);
+  })();
+</script>
+{% endblock %}
