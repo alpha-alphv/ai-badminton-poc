@@ -15,9 +15,22 @@ logger = logging.getLogger(__name__)
 _model_cache: dict[str, YOLO] = {}
 
 
+def _resolve_device(setting: str) -> str:
+    """Translate 'auto' into 'cuda' when available, else 'cpu'."""
+    if setting != "auto":
+        return setting
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
 def _get_model(name: str) -> YOLO:
     if name not in _model_cache:
-        logger.info("loading YOLO model %s on device=%s", name, settings.inference_device)
+        logger.info("loading YOLO model %s", name)
         _model_cache[name] = YOLO(name)
     return _model_cache[name]
 
@@ -55,6 +68,10 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
     start = time.time()
     metadata = _video_metadata(video_path)
 
+    device = _resolve_device(settings.inference_device)
+    logger.info("job %s: model=%s device=%s (requested=%s)",
+                job_id, settings.inference_model, device, settings.inference_device)
+
     model = _get_model(settings.inference_model)
     max_frames = settings.inference_max_frames if settings.inference_max_frames > 0 else None
 
@@ -68,7 +85,7 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
         source=str(video_path),
         tracker=_tracker_path(),
         persist=True,
-        device=settings.inference_device,
+        device=device,
         stream=True,
         verbose=False,
         classes=[0],
@@ -146,7 +163,7 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
     return {
         "pipeline": "player_tracking",
         "model": settings.inference_model,
-        "device": settings.inference_device,
+        "device": device,
         "frames_processed": frames_processed,
         "elapsed_seconds": elapsed,
         "metadata": metadata,

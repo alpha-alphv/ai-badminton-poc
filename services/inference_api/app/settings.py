@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     data_dir: str = "/data"
     log_level: str = "INFO"
 
-    inference_device: str = "cpu"
+    inference_device: str = "auto"  # "auto" | "cpu" | "cuda" | "cuda:0" | "0"
     inference_model: str = "yolov8s-pose.pt"
     inference_max_frames: int = 1000
     inference_conf_threshold: float = 0.4
