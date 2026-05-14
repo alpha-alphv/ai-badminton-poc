@@ -224,11 +224,19 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
     summaries.sort(key=lambda s: -s["frame_count"])
 
     elapsed = time.time() - start
+    detection_rate = (summary["detections"] / frames_processed) if frames_processed else 0.0
     logger.info(
-        "job %s: %d frames, %d tracks, %d rallies, %d shuttle hits, %.1fs",
+        "job %s: %d frames, %d tracks, %d rallies, %d shuttle hits (%.1f%%), %.1fs",
         job_id, frames_processed, len(summaries), len(rallies),
-        summary["detections"], elapsed,
+        summary["detections"], detection_rate * 100.0, elapsed,
     )
+    if summary["detections"] == 0:
+        logger.warning(
+            "job %s: shuttle detector found 0 hits over %d frames — check that the "
+            "camera is static (MOG2 needs a stable background) and that the input "
+            "isn't too low-resolution for the shuttle to clear min_area.",
+            job_id, frames_processed,
+        )
 
     return {
         "pipeline": "player_tracking",

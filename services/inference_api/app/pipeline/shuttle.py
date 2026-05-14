@@ -22,30 +22,68 @@ import numpy as np
 
 @dataclass
 class ShuttleDetector:
-    """Motion-based shuttle candidate detector with simple linking."""
+    """Motion-based shuttle candidate detector with simple linking.
 
-    min_area: int = 4
-    max_area: int = 400
+    The search radius grows with consecutive misses so a brief occlusion
+    doesn't permanently lock the detector to a stale anchor, and ``_last``
+    is cleared after ``max_misses`` empty frames to allow re-acquisition
+    elsewhere on the court (e.g. after a serve from the other side).
+    """
+
+    min_area: int = 6
+    max_area: int = 1200
     max_aspect: float = 3.0
-    max_link_dist_px: float = 120.0
+    max_link_dist_px: float = 220.0
     history: int = 200
+    warmup_frames: int = 15
+    max_misses: int = 30          # frames of silence before _last is dropped
+    miss_radius_growth: float = 1.6  # search radius multiplier per missed frame
+    miss_radius_cap: float = 4.0     # ceiling on the growth multiplier
+    exclude_shrink: float = 0.15  # shrink player bboxes inward by this fraction
 
     _bg: Any = field(init=False, default=None, repr=False)
     _last: tuple[float, float] | None = field(init=False, default=None, repr=False)
+    _misses: int = field(init=False, default=0, repr=False)
+    _frame_idx: int = field(init=False, default=0, repr=False)
 
     def __post_init__(self) -> None:
         self._bg = cv2.createBackgroundSubtractorMOG2(
             history=self.history, varThreshold=24, detectShadows=False
         )
 
+    def _shrink_box(self, x1: float, y1: float, x2: float, y2: float):
+        """Erode a bbox inward so the shuttle near a player's racquet isn't masked out."""
+        if self.exclude_shrink <= 0:
+            return int(x1), int(y1), int(x2), int(y2)
+        w = x2 - x1
+        h = y2 - y1
+        dx = w * self.exclude_shrink
+        dy = h * self.exclude_shrink
+        return int(x1 + dx), int(y1 + dy), int(x2 - dx), int(y2 - dy)
+
     def detect(self, frame: np.ndarray, exclude_boxes=None) -> tuple[float, float] | None:
         """Return the best shuttle candidate (x, y) for this frame, or None."""
+        self._frame_idx += 1
         mask = self._bg.apply(frame)
+        # MOG2 needs a few frames to stabilise; suppress output during warmup.
+        if self._frame_idx <= self.warmup_frames:
+            return None
         mask = cv2.medianBlur(mask, 3)
-        # Drop player regions so we don't latch onto a swinging arm.
+        # Drop player regions so we don't latch onto a swinging arm. Shrink
+        # each box inward so a shuttle right at the racquet head still passes.
         if exclude_boxes is not None:
             for x1, y1, x2, y2 in exclude_boxes:
-                cv2.rectangle(mask, (int(x1), int(y1)), (int(x2), int(y2)), 0, -1)
+                sx1, sy1, sx2, sy2 = self._shrink_box(x1, y1, x2, y2)
+                if sx2 > sx1 and sy2 > sy1:
+                    cv2.rectangle(mask, (sx1, sy1), (sx2, sy2), 0, -1)
+
+        # Search radius expands with consecutive misses (shuttle may have
+        # travelled further during the gap), capped to avoid latching onto noise.
+        if self._last is not None and self._misses > 0:
+            grow = min(1.0 + self.miss_radius_growth * self._misses, self.miss_radius_cap)
+        else:
+            grow = 1.0
+        link_radius = self.max_link_dist_px * grow
 
         num, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
         best: tuple[float, float] | None = None
@@ -65,16 +103,24 @@ class ShuttleDetector:
             # Prefer candidates that continue the previous trajectory.
             if self._last is not None:
                 d = math.hypot(cx - self._last[0], cy - self._last[1])
-                if d > self.max_link_dist_px:
+                if d > link_radius:
                     continue
                 score = -d - 0.05 * area
             else:
-                score = -area  # cold start: prefer the smallest plausible blob
+                # Cold start (or re-acquisition): prefer compact, mid-sized
+                # blobs over either single-pixel noise or large motion smears.
+                score = -abs(area - 40)
             if score > best_score:
                 best_score = score
                 best = (cx, cy)
 
-        self._last = best if best is not None else self._last
+        if best is not None:
+            self._last = best
+            self._misses = 0
+        else:
+            self._misses += 1
+            if self._misses >= self.max_misses:
+                self._last = None
         return best
 
 
