@@ -26,6 +26,12 @@ models/*.onnx
 models/*.engine
 !models/.gitkeep
 
+# Custom-trained shuttle weights — large binaries kept out of git.
+weights/*.pt
+weights/*.onnx
+weights/*.engine
+!weights/.gitkeep
+
 .idea/
 .vscode/
 *.swp
