@@ -68,6 +68,7 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/data
+      - ./weights:/weights:ro
       - ./services/inference_api:/app/services/inference_api
       - ./shared:/app/shared
     depends_on:

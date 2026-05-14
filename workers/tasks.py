@@ -22,6 +22,9 @@ _ARTIFACT_FIELDS = [
     ("heatmap_png_b64", "heatmap", "heatmap.png"),
     ("sample_frame_png_b64", "sample_frame", "sample_frame.png"),
     ("annotated_video_mp4_b64", "annotated_video", "annotated.mp4"),
+    ("speed_chart_png_b64", "speed_chart", "speed_chart.png"),
+    ("zone_chart_png_b64", "zone_chart", "zone_chart.png"),
+    ("heatmap_mpl_png_b64", "heatmap_mpl", "heatmap_mpl.png"),
 ]
 
 

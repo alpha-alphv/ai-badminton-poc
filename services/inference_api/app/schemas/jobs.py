@@ -40,10 +40,29 @@ class ShuttleSummary(BaseModel):
     peak_speed_px_per_s: float = 0.0
 
 
+class PlayerSummary(BaseModel):
+    track_id: int
+    distance_m: float = 0.0
+    mean_speed_mps: float = 0.0
+    peak_speed_mps: float = 0.0
+
+
+class Shot(BaseModel):
+    shot_number: int
+    frame: int
+    shot_type: str
+    player_track_id: int | None = None
+    speed_mps: float = 0.0
+    angle_deg: float = 0.0
+
+
 class JobArtifacts(BaseModel):
     heatmap_png_b64: str | None = None
     sample_frame_png_b64: str | None = None
     annotated_video_mp4_b64: str | None = None
+    speed_chart_png_b64: str | None = None
+    zone_chart_png_b64: str | None = None
+    heatmap_mpl_png_b64: str | None = None
     tracks_json_path: str | None = None
     rallies_json_path: str | None = None
 
@@ -59,5 +78,8 @@ class JobRunResponse(BaseModel):
     tracks: list[TrackSummary] = Field(default_factory=list)
     rallies: list[RallySummary] = Field(default_factory=list)
     shuttle: ShuttleSummary = Field(default_factory=ShuttleSummary)
+    players: list[PlayerSummary] = Field(default_factory=list)
+    shots: list[Shot] = Field(default_factory=list)
+    scale_m_per_px: float = 0.0
     artifacts: JobArtifacts = Field(default_factory=JobArtifacts)
     notes: str | None = None

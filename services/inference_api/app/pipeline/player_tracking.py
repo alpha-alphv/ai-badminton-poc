@@ -8,13 +8,15 @@ import cv2
 from ultralytics import YOLO
 
 from ..settings import settings
-from .shuttle import ShuttleDetector, segment_rallies, shuttle_summary
+from .analytics import build_analytics
+from .shuttle import build_shuttle_detector, segment_rallies, shuttle_summary
 from .visualize import (
     VideoAnnotator,
     draw_hud,
     draw_players,
     draw_shuttle,
     make_shuttle_trail,
+    mux_audio_with_moviepy,
     render_heatmap,
     render_sample_frame,
 )
@@ -109,7 +111,7 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     annotated_path = out_dir / "annotated.mp4"
     annotator = VideoAnnotator(annotated_path, width, height, fps)
-    shuttle_detector = ShuttleDetector()
+    shuttle_detector = build_shuttle_detector(settings, device)
     shuttle_trail = make_shuttle_trail()
 
     results = model.track(
@@ -205,11 +207,37 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
         render_sample_frame(frame, xyxy, ids, kpts, sample_path)
         sample_b64 = b64encode(sample_path.read_bytes()).decode("ascii")
 
+    # Mux the source's audio back onto the silent annotated mp4 via
+    # MoviePy. Falls through silently if there's no audio track.
+    if annotated_path.exists() and annotated_path.stat().st_size > 0:
+        mux_audio_with_moviepy(annotated_path, video_path)
+
     annotated_b64 = (
         b64encode(annotated_path.read_bytes()).decode("ascii")
         if annotated_path.exists() and annotated_path.stat().st_size > 0
         else None
     )
+
+    analytics = build_analytics(
+        tracks=tracks,
+        shuttle_track=shuttle_track,
+        fps=fps,
+        width=width,
+        height=height,
+        court_length_m=settings.court_length_m,
+        out_dir=out_dir,
+    )
+
+    def _b64_or_none(p: Path) -> str | None:
+        try:
+            return b64encode(p.read_bytes()).decode("ascii") if p.exists() else None
+        except Exception:
+            logger.exception("failed to read analytics artifact %s", p)
+            return None
+
+    speed_chart_b64 = _b64_or_none(analytics["artifact_paths"]["speed_chart"])
+    zone_chart_b64 = _b64_or_none(analytics["artifact_paths"]["zone_chart"])
+    heatmap_mpl_b64 = _b64_or_none(analytics["artifact_paths"]["heatmap_mpl"])
 
     summaries = []
     for tid, frames in tracks.items():
@@ -232,9 +260,9 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
     )
     if summary["detections"] == 0:
         logger.warning(
-            "job %s: shuttle detector found 0 hits over %d frames — check that the "
-            "camera is static (MOG2 needs a stable background) and that the input "
-            "isn't too low-resolution for the shuttle to clear min_area.",
+            "job %s: shuttle detector found 0 hits over %d frames — "
+            "if SHUTTLE_MODEL_PATH is set, verify the weights and class names; "
+            "otherwise the MOG2 fallback needs a static camera & enough resolution.",
             job_id, frames_processed,
         )
 
@@ -248,10 +276,16 @@ def run_player_tracking(job_id: str, video_path: Path) -> dict:
         "tracks": summaries,
         "rallies": rallies,
         "shuttle": summary,
+        "players": analytics["player_summary"],
+        "shots": analytics["shots"],
+        "scale_m_per_px": analytics["scale_m_per_px"],
         "artifacts": {
             "heatmap_png_b64": heatmap_b64,
             "sample_frame_png_b64": sample_b64,
             "annotated_video_mp4_b64": annotated_b64,
+            "speed_chart_png_b64": speed_chart_b64,
+            "zone_chart_png_b64": zone_chart_b64,
+            "heatmap_mpl_png_b64": heatmap_mpl_b64,
             "tracks_json_path": str(tracks_file),
             "rallies_json_path": str(rallies_file),
         },

@@ -122,6 +122,57 @@
       <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.heatmap) }}" alt="player heatmap">
     {% endif %}
 
+    {% if files.heatmap_mpl %}
+      <h3>Per-player heatmap (matplotlib)</h3>
+      <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.heatmap_mpl) }}" alt="per-player heatmap">
+    {% endif %}
+
+    {% if files.speed_chart %}
+      <h3>Player speed over time</h3>
+      <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.speed_chart) }}" alt="speed-over-time chart">
+    {% endif %}
+
+    {% if files.zone_chart %}
+      <h3>Court zone occupancy</h3>
+      <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.zone_chart) }}" alt="zone occupancy">
+    {% endif %}
+
+    {% if r.players %}
+      <h3>Player aggregates</h3>
+      <table>
+        <thead><tr><th>Track</th><th>Distance (m)</th><th>Mean speed (m/s)</th><th>Peak speed (m/s)</th></tr></thead>
+        <tbody>
+          {% for p in r.players %}
+          <tr>
+            <td>{{ p.track_id }}</td>
+            <td>{{ '%.2f'|format(p.distance_m) }}</td>
+            <td>{{ '%.2f'|format(p.mean_speed_mps) }}</td>
+            <td>{{ '%.2f'|format(p.peak_speed_mps) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% if r.shots %}
+      <h3>Detected shots <span class="muted">({{ r.shots|length }})</span></h3>
+      <table>
+        <thead><tr><th>#</th><th>Frame</th><th>Type</th><th>Hitter (track)</th><th>Speed (m/s)</th><th>Angle (°)</th></tr></thead>
+        <tbody>
+          {% for s in r.shots %}
+          <tr>
+            <td>{{ s.shot_number }}</td>
+            <td>{{ s.frame }}</td>
+            <td>{{ s.shot_type }}</td>
+            <td>{{ s.player_track_id if s.player_track_id is not none else '—' }}</td>
+            <td>{{ '%.2f'|format(s.speed_mps) }}</td>
+            <td>{{ '%.1f'|format(s.angle_deg) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
     {% if r.tracks %}
       <h3>Player tracks <span class="muted">({{ r.tracks|length }})</span></h3>
       <table>

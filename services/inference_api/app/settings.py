@@ -14,5 +14,14 @@ class Settings(BaseSettings):
     inference_iou_threshold: float = 0.5
     inference_imgsz: int = 640
 
+    # Custom-trained YOLO11 shuttle detector. Empty string keeps the
+    # motion-based fallback (MOG2) so the service still runs without
+    # weights on disk.
+    shuttle_model_path: str = ""
+    shuttle_conf_threshold: float = 0.25
+    shuttle_class_names: str = "shuttle,shuttlecock"  # comma-separated; case-insensitive substring match
+    # Badminton singles court is 13.4 m long. Used to convert pixel speeds → m/s.
+    court_length_m: float = 13.4
+
 
 settings = Settings()

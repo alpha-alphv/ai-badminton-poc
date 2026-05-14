@@ -278,3 +278,77 @@ def render_sample_frame(
 
 def make_shuttle_trail() -> deque:
     return deque(maxlen=_SHUTTLE_TRAIL_LEN)
+
+
+def mux_audio_with_moviepy(
+    silent_video_path: Path,
+    source_video_path: Path,
+    output_path: Path | None = None,
+) -> Path:
+    """Use MoviePy to copy the audio track from ``source_video_path``
+    onto the silent annotated mp4. Writes to ``output_path`` (defaults
+    to overwriting ``silent_video_path``) and returns the final path.
+
+    No-ops gracefully when the source has no audio or MoviePy can't open
+    one of the files — the silent annotated video stays usable.
+    """
+    output_path = output_path or silent_video_path
+    if not silent_video_path.exists() or silent_video_path.stat().st_size == 0:
+        logger.warning("mux_audio: no annotated video at %s; skipping", silent_video_path)
+        return silent_video_path
+    try:
+        # moviepy 1.x ships everything from moviepy.editor; the package
+        # is heavy so import is local to keep cold-start fast.
+        from moviepy.editor import AudioFileClip, VideoFileClip
+    except Exception as exc:
+        logger.warning("moviepy not available — leaving annotated video silent (%s)", exc)
+        return silent_video_path
+
+    video_clip = None
+    source_clip = None
+    audio_clip = None
+    tmp_path = output_path.with_suffix(".muxed.mp4")
+    try:
+        source_clip = VideoFileClip(str(source_video_path))
+        if source_clip.audio is None:
+            logger.info("mux_audio: source %s has no audio track; skipping", source_video_path)
+            return silent_video_path
+        video_clip = VideoFileClip(str(silent_video_path))
+        # Trim the audio to the annotated duration (we may have stopped
+        # encoding early via inference_max_frames).
+        audio_clip = source_clip.audio.subclip(0, min(video_clip.duration, source_clip.audio.duration))
+        muxed = video_clip.set_audio(audio_clip)
+        muxed.write_videofile(
+            str(tmp_path),
+            codec="libx264",
+            audio_codec="aac",
+            preset="fast",
+            threads=2,
+            logger=None,
+            verbose=False,
+            temp_audiofile=str(tmp_path.with_suffix(".aac.tmp")),
+            remove_temp=True,
+        )
+    except Exception as exc:
+        logger.exception("mux_audio failed (%s); keeping silent annotated video", exc)
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        return silent_video_path
+    finally:
+        for c in (audio_clip, video_clip, source_clip):
+            try:
+                if c is not None:
+                    c.close()
+            except Exception:
+                pass
+
+    try:
+        tmp_path.replace(output_path)
+    except Exception as exc:
+        logger.exception("mux_audio: rename %s -> %s failed (%s)", tmp_path, output_path, exc)
+        return silent_video_path
+    logger.info("mux_audio: wrote %s with audio from %s", output_path, source_video_path)
+    return output_path

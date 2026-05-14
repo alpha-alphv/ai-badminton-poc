@@ -7,7 +7,14 @@ opencv-python-headless>=4.9
 numpy>=1.26,<3.0
 sqlalchemy>=2.0,<3.0
 
-# YOLOv8-pose + ByteTrack
+# YOLOv8-pose + ByteTrack + YOLO11 shuttle detector
 ultralytics>=8.2,<9.0
 lap>=0.4
 Pillow>=10.0
+
+# analytics + visualization stack (mirrors upstream Badminton_Analytics_Project)
+pandas>=2.1,<3.0
+matplotlib>=3.8,<4.0
+moviepy>=1.0,<2.0
+scipy>=1.11,<2.0
+shapely>=2.0,<3.0

@@ -32,6 +32,13 @@ export INFERENCE_MODEL="${INFERENCE_MODEL:-yolov8s-pose.pt}"
 export INFERENCE_MAX_FRAMES="${INFERENCE_MAX_FRAMES:-1000}"
 export INFERENCE_CONF_THRESHOLD="${INFERENCE_CONF_THRESHOLD:-0.4}"
 
+# YOLO11 shuttle weights live in $REPO_DIR/weights on the host. Override
+# SHUTTLE_MODEL_PATH explicitly to point elsewhere; empty disables it.
+export SHUTTLE_MODEL_PATH="${SHUTTLE_MODEL_PATH:-$REPO_DIR/weights/best.pt}"
+export SHUTTLE_CONF_THRESHOLD="${SHUTTLE_CONF_THRESHOLD:-0.25}"
+export SHUTTLE_CLASS_NAMES="${SHUTTLE_CLASS_NAMES:-shuttle,shuttlecock}"
+export COURT_LENGTH_M="${COURT_LENGTH_M:-13.4}"
+
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8000}"
 
@@ -41,6 +48,11 @@ echo "==> Launch config"
 echo "    repo=$REPO_DIR"
 echo "    device=$INFERENCE_DEVICE  model=$INFERENCE_MODEL  max_frames=$INFERENCE_MAX_FRAMES"
 echo "    bind=$HOST:$PORT"
+if [ -n "$SHUTTLE_MODEL_PATH" ] && [ -f "$SHUTTLE_MODEL_PATH" ]; then
+  echo "    shuttle_weights=$SHUTTLE_MODEL_PATH"
+else
+  echo "    shuttle_weights=<motion fallback> (SHUTTLE_MODEL_PATH=$SHUTTLE_MODEL_PATH)"
+fi
 
 echo "==> GPU sanity check"
 python - <<'PY'

@@ -1,10 +1,15 @@
-"""POC shuttle detection + rally segmentation.
+"""Shuttle detection + rally segmentation.
 
-A trained shuttle-specific detector is the long-term plan (the ISN spec
-demands ≥90% trajectory accuracy at speeds up to 500 km/h). For this POC
-visualization we use a motion-based heuristic: background subtraction
-isolates fast small objects, size/aspect filters keep shuttle-shaped
-blobs, and a nearest-neighbour link across frames produces a trajectory.
+Two detectors are exposed:
+
+1. ``YoloShuttleDetector`` — wraps a custom-trained YOLO11 model
+   (mirrors the Roboflow ``Shuttlecock.v1i.yolov11`` workflow used in
+   the upstream Badminton_Analytics_Project). Path to the ``.pt``
+   weights is taken from ``settings.shuttle_model_path``.
+
+2. ``ShuttleDetector`` — MOG2 background-subtraction fallback for
+   environments without trained weights. Same ``detect()`` signature so
+   the pipeline can swap one for the other.
 
 Rally segmentation: a rally is a contiguous stretch of frames where the
 shuttle is detected with at most ``rally_gap_frames`` of silence in
@@ -12,12 +17,16 @@ between. Periods longer than that delimit rally boundaries.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,6 +131,127 @@ class ShuttleDetector:
             if self._misses >= self.max_misses:
                 self._last = None
         return best
+
+
+@dataclass
+class YoloShuttleDetector:
+    """YOLO11 single-class shuttle detector.
+
+    Loads weights from ``model_path`` (anything ultralytics ``YOLO()``
+    accepts). ``class_names`` is a case-insensitive substring match —
+    e.g. ``["shuttle", "shuttlecock"]`` picks up either label without
+    needing to know the exact class index for the trained weights.
+
+    Picks the highest-confidence shuttle box per frame; if the previous
+    detection is available, prefers candidates close to it so quick
+    rallies don't jitter to spurious far-away boxes.
+    """
+
+    model_path: str
+    conf_threshold: float = 0.25
+    class_names: tuple[str, ...] = ("shuttle", "shuttlecock")
+    device: str = "cpu"
+    imgsz: int = 640
+    max_link_dist_px: float = 280.0
+
+    _model: Any = field(init=False, default=None, repr=False)
+    _shuttle_class_ids: set[int] = field(init=False, default_factory=set, repr=False)
+    _last: tuple[float, float] | None = field(init=False, default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        from ultralytics import YOLO  # local import: optional dep at module load
+
+        if not Path(self.model_path).exists():
+            raise FileNotFoundError(f"shuttle weights not found: {self.model_path}")
+        self._model = YOLO(self.model_path)
+        names = self._model.names if isinstance(self._model.names, dict) else dict(enumerate(self._model.names))
+        wanted = tuple(s.lower() for s in self.class_names)
+        for cls_id, name in names.items():
+            if any(w in str(name).lower() for w in wanted):
+                self._shuttle_class_ids.add(int(cls_id))
+        if not self._shuttle_class_ids:
+            # Single-class shuttle models often just label class 0 "0" or "object" —
+            # fall back to class 0 rather than silently returning no detections.
+            logger.warning(
+                "shuttle weights %s have no class matching %s; defaulting to class 0 (names=%s)",
+                self.model_path, self.class_names, names,
+            )
+            self._shuttle_class_ids = {0}
+        logger.info("YoloShuttleDetector ready: weights=%s shuttle_classes=%s",
+                    self.model_path, sorted(self._shuttle_class_ids))
+
+    def detect(self, frame: np.ndarray, exclude_boxes=None) -> tuple[float, float] | None:
+        """Return the best shuttle (x, y) for this frame, or None.
+
+        ``exclude_boxes`` is accepted for signature parity with the
+        motion detector but ignored — a trained model handles
+        player/shuttle separation natively.
+        """
+        results = self._model.predict(
+            source=frame,
+            conf=self.conf_threshold,
+            device=self.device,
+            imgsz=self.imgsz,
+            verbose=False,
+        )
+        if not results:
+            return None
+        boxes = results[0].boxes
+        if boxes is None or len(boxes) == 0:
+            return None
+        xyxy = boxes.xyxy.cpu().numpy()
+        confs = boxes.conf.cpu().numpy()
+        cls = boxes.cls.cpu().numpy().astype(int)
+
+        best: tuple[float, float] | None = None
+        best_score = -math.inf
+        for i in range(len(xyxy)):
+            if int(cls[i]) not in self._shuttle_class_ids:
+                continue
+            x1, y1, x2, y2 = xyxy[i].tolist()
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            score = float(confs[i])
+            if self._last is not None:
+                d = math.hypot(cx - self._last[0], cy - self._last[1])
+                # Penalise candidates that teleport away from last known position.
+                if d > self.max_link_dist_px:
+                    score -= 0.3
+            if score > best_score:
+                best_score = score
+                best = (cx, cy)
+
+        if best is not None:
+            self._last = best
+        return best
+
+
+def build_shuttle_detector(settings_obj, device: str):
+    """Return a YOLO11 detector if weights are configured & loadable,
+    otherwise the motion-based fallback. Logged either way so the user
+    can see which path the run is on."""
+    path = getattr(settings_obj, "shuttle_model_path", "") or ""
+    if path and Path(path).exists():
+        try:
+            class_names = tuple(
+                s.strip() for s in getattr(settings_obj, "shuttle_class_names", "shuttle").split(",")
+                if s.strip()
+            ) or ("shuttle",)
+            return YoloShuttleDetector(
+                model_path=path,
+                conf_threshold=settings_obj.shuttle_conf_threshold,
+                class_names=class_names,
+                device=device,
+                imgsz=settings_obj.inference_imgsz,
+            )
+        except Exception:
+            logger.exception("failed to load YOLO11 shuttle detector at %s — falling back to motion heuristic", path)
+    else:
+        if path:
+            logger.warning("shuttle_model_path=%s not found; using motion fallback", path)
+        else:
+            logger.info("shuttle_model_path empty; using motion-based shuttle fallback")
+    return ShuttleDetector()
 
 
 def segment_rallies(
