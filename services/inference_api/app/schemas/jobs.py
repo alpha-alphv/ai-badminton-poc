@@ -23,10 +23,29 @@ class TrackSummary(BaseModel):
     mean_confidence: float
 
 
+class RallySummary(BaseModel):
+    rally_id: int
+    start_frame: int
+    end_frame: int
+    duration_seconds: float
+    shuttle_hits: int
+    path_length_px: float
+    peak_speed_px_per_s: float
+
+
+class ShuttleSummary(BaseModel):
+    detections: int = 0
+    total_distance_px: float = 0.0
+    mean_speed_px_per_s: float = 0.0
+    peak_speed_px_per_s: float = 0.0
+
+
 class JobArtifacts(BaseModel):
     heatmap_png_b64: str | None = None
     sample_frame_png_b64: str | None = None
+    annotated_video_mp4_b64: str | None = None
     tracks_json_path: str | None = None
+    rallies_json_path: str | None = None
 
 
 class JobRunResponse(BaseModel):
@@ -38,5 +57,7 @@ class JobRunResponse(BaseModel):
     elapsed_seconds: float = 0.0
     metadata: VideoMetadata
     tracks: list[TrackSummary] = Field(default_factory=list)
+    rallies: list[RallySummary] = Field(default_factory=list)
+    shuttle: ShuttleSummary = Field(default_factory=ShuttleSummary)
     artifacts: JobArtifacts = Field(default_factory=JobArtifacts)
     notes: str | None = None

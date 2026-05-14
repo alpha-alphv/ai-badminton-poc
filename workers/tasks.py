@@ -17,10 +17,12 @@ INFERENCE_TIMEOUT_S = float(os.environ.get("INFERENCE_TIMEOUT_S", "3600"))
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/data"))
 
 
-_ARTIFACT_FIELDS = {
-    "heatmap_png_b64": "heatmap.png",
-    "sample_frame_png_b64": "sample_frame.png",
-}
+# (response_field, template_key, filename_on_disk)
+_ARTIFACT_FIELDS = [
+    ("heatmap_png_b64", "heatmap", "heatmap.png"),
+    ("sample_frame_png_b64", "sample_frame", "sample_frame.png"),
+    ("annotated_video_mp4_b64", "annotated_video", "annotated.mp4"),
+]
 
 
 def _hydrate_artifacts(job_id: str, artifacts: dict | None) -> dict:
@@ -31,12 +33,12 @@ def _hydrate_artifacts(job_id: str, artifacts: dict | None) -> dict:
     out_dir = DATA_DIR / "artifacts" / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
     saved: dict[str, str] = {}
-    for field, filename in _ARTIFACT_FIELDS.items():
+    for field, key, filename in _ARTIFACT_FIELDS:
         blob = artifacts.get(field)
         if not blob:
             continue
         (out_dir / filename).write_bytes(b64decode(blob))
-        saved[field.removesuffix("_b64")] = filename
+        saved[key] = filename
     return saved
 
 
@@ -87,8 +89,8 @@ def run_job(self, job_id: str) -> dict:
     # Strip base64 blobs so the DB result stays small; keep references.
     stored = dict(payload)
     artifacts = dict(stored.get("artifacts") or {})
-    for f in _ARTIFACT_FIELDS:
-        artifacts.pop(f, None)
+    for field, _key, _filename in _ARTIFACT_FIELDS:
+        artifacts.pop(field, None)
     artifacts["local_files"] = local_files
     stored["artifacts"] = artifacts
 

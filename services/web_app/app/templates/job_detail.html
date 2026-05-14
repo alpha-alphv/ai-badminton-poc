@@ -3,7 +3,7 @@
 {% block content %}
 <section>
   <h2>Job <code>{{ job.id }}</code></h2>
-  <dl>
+  <dl class="grid">
     <dt>File</dt><dd>{{ job.filename }}</dd>
     <dt>Status</dt><dd><span class="status status-{{ job.status }}">{{ job.status }}</span></dd>
     <dt>Progress</dt><dd>{{ job.progress }}%</dd>
@@ -18,21 +18,102 @@
   </div>
   {% endif %}
 
-  {% if job.result %}
-    {% set r = job.result %}
-    <h3>Pipeline summary</h3>
-    <dl class="grid">
-      <dt>Pipeline</dt><dd>{{ r.pipeline }}</dd>
-      <dt>Model</dt><dd>{{ r.model }}</dd>
-      <dt>Device</dt><dd>{{ r.device }}</dd>
-      <dt>Frames processed</dt><dd>{{ r.frames_processed }}</dd>
-      <dt>Inference time</dt><dd>{{ '%.2f'|format(r.elapsed_seconds or 0) }} s</dd>
-      <dt>Source</dt><dd>{{ r.metadata.width }}x{{ r.metadata.height }} @ {{ '%.1f'|format(r.metadata.fps) }} fps, {{ '%.1f'|format(r.metadata.duration_seconds) }} s</dd>
-    </dl>
+  {% set r = job.result %}
+  {% set files = (r and r.artifacts and r.artifacts.local_files) or {} %}
+  {% set rallies = (r and r.rallies) or [] %}
+  {% set shuttle = (r and r.shuttle) or {} %}
+  {% set meta = (r and r.metadata) or {} %}
 
-    {% set files = (r.artifacts and r.artifacts.local_files) or {} %}
+  <div class="detail-grid">
+    <div class="video-pane">
+      <h3>Annotated video</h3>
+      {% if files.annotated_video %}
+        <video
+          class="annotated-video"
+          controls
+          preload="metadata"
+          src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.annotated_video) }}">
+          Your browser cannot play this video.
+        </video>
+        <p class="hint">Yellow ring = shuttle, coloured boxes = tracked players (one colour per ID).</p>
+      {% elif job.status == 'succeeded' %}
+        <p class="hint">No annotated video produced for this job.</p>
+      {% else %}
+        <div class="video-placeholder">
+          <p>Processing video…</p>
+          <p class="hint">The annotated playback will appear here when the worker finishes.</p>
+        </div>
+      {% endif %}
+
+      {% if r %}
+        <dl class="grid compact">
+          <dt>Pipeline</dt><dd>{{ r.pipeline }}</dd>
+          <dt>Model</dt><dd>{{ r.model }}</dd>
+          <dt>Device</dt><dd>{{ r.device }}</dd>
+          <dt>Frames processed</dt><dd>{{ r.frames_processed }}</dd>
+          <dt>Inference time</dt><dd>{{ '%.2f'|format(r.elapsed_seconds or 0) }} s</dd>
+          <dt>Source</dt><dd>{{ meta.width }}x{{ meta.height }} @ {{ '%.1f'|format(meta.fps or 0) }} fps, {{ '%.1f'|format(meta.duration_seconds or 0) }} s</dd>
+        </dl>
+      {% endif %}
+    </div>
+
+    <aside class="rally-pane">
+      <h3>Rallies <span class="muted">({{ rallies|length }})</span></h3>
+      {% if rallies %}
+        <table class="rally-table">
+          <thead>
+            <tr>
+              <th>#</th><th>Start</th><th>End</th><th>Duration</th><th>Shuttle hits</th><th>Peak px/s</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rally in rallies %}
+              <tr>
+                <td>{{ rally.rally_id }}</td>
+                <td>{{ rally.start_frame }}</td>
+                <td>{{ rally.end_frame }}</td>
+                <td>{{ '%.2f'|format(rally.duration_seconds) }} s</td>
+                <td>{{ rally.shuttle_hits }}</td>
+                <td>{{ '%.0f'|format(rally.peak_speed_px_per_s) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="hint">{% if job.status == 'succeeded' %}No rallies segmented from the shuttle trajectory.{% else %}Rally segments will populate after processing.{% endif %}</p>
+      {% endif %}
+    </aside>
+  </div>
+
+  {% if job.status == 'succeeded' and shuttle %}
+    <h3>Shuttle points summary</h3>
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="stat-value">{{ shuttle.detections or 0 }}</div>
+        <div class="stat-label">Shuttle detections</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">{{ rallies|length }}</div>
+        <div class="stat-label">Rallies</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">{{ '%.0f'|format(shuttle.total_distance_px or 0) }}</div>
+        <div class="stat-label">Total path (px)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">{{ '%.0f'|format(shuttle.mean_speed_px_per_s or 0) }}</div>
+        <div class="stat-label">Mean speed (px/s)</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">{{ '%.0f'|format(shuttle.peak_speed_px_per_s or 0) }}</div>
+        <div class="stat-label">Peak speed (px/s)</div>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if r %}
     {% if files.sample_frame %}
-      <h3>Sample frame (YOLOv8-pose + ByteTrack)</h3>
+      <h3>Sample frame</h3>
       <img class="artifact" src="{{ url_for('jobs.artifact', job_id=job.id, filename=files.sample_frame) }}" alt="annotated sample frame">
     {% endif %}
 
@@ -42,7 +123,7 @@
     {% endif %}
 
     {% if r.tracks %}
-      <h3>Tracks <span class="muted">({{ r.tracks|length }})</span></h3>
+      <h3>Player tracks <span class="muted">({{ r.tracks|length }})</span></h3>
       <table>
         <thead><tr><th>ID</th><th>First frame</th><th>Last frame</th><th>Frames</th><th>Mean confidence</th></tr></thead>
         <tbody>
@@ -58,8 +139,6 @@
         </tbody>
       </table>
     {% endif %}
-  {% else %}
-    <p class="hint">Result will appear here when the worker completes the job.</p>
   {% endif %}
 </section>
 <script>
