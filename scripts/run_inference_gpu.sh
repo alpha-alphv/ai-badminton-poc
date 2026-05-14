@@ -10,6 +10,18 @@ cd "$REPO_DIR"
 if [ -f .venv/bin/activate ]; then
   # shellcheck disable=SC1091
   source .venv/bin/activate
+  echo "==> Using venv: $REPO_DIR/.venv"
+else
+  echo "==> No .venv found — using system Python ($(command -v python || echo none))"
+fi
+
+if ! command -v uvicorn >/dev/null 2>&1; then
+  echo
+  echo "ERROR: 'uvicorn' is not on PATH." >&2
+  echo "Install the inference deps first:" >&2
+  echo "    pip install -r services/inference_api/requirements.txt" >&2
+  echo "(or run scripts/grafilab_setup.sh to build a clean .venv with everything)" >&2
+  exit 127
 fi
 
 export PYTHONPATH="$REPO_DIR"
